@@ -5,6 +5,7 @@
   "description": "Private Echo operator — Bobby's Suno web account via encrypted Clerk session. Not the public API plugin.",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "mcp": "node src/mcp-stdio.js"
   }
 }

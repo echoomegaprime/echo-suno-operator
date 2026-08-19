@@ -4,6 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { saveCookie, readCookie, clearCookie, publicHint } from "./vault.js";
 import { generate, poll, whoAmI } from "./suno.js";
+import { handleMcp, RESOURCE, resourceMeta } from "./mcp.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 8788);
@@ -27,11 +28,55 @@ async function readBody(req) {
 
 async function handle(req, res) {
   const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
+  const host = `${req.headers["x-forwarded-proto"] || "http"}://${req.headers.host || `127.0.0.1:${PORT}`}`;
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "content-type, authorization, mcp-session-id",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    });
+    res.end();
+    return;
+  }
 
   if (req.method === "GET" && url.pathname === "/") {
     const html = await readFile(join(root, "public/index.html"), "utf8");
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(html);
+    return;
+  }
+
+  if (
+    req.method === "GET" &&
+    (url.pathname === `/.well-known/oauth-protected-resource${RESOURCE.path}` ||
+      url.pathname === `${RESOURCE.path}/.well-known/oauth-protected-resource`)
+  ) {
+    json(res, 200, resourceMeta(host));
+    return;
+  }
+
+  if (
+    (req.method === "POST" || req.method === "GET") &&
+    (url.pathname === RESOURCE.path || url.pathname === "/mcp")
+  ) {
+    if (req.method === "GET") {
+      json(res, 200, {
+        ok: true,
+        resource: RESOURCE.canonical,
+        path: RESOURCE.path,
+        tools: ["suno_status", "suno_generate", "suno_job"],
+      });
+      return;
+    }
+    const body = await readBody(req);
+    const rpc = await handleMcp(body);
+    if (rpc === null) {
+      res.writeHead(202);
+      res.end();
+      return;
+    }
+    json(res, 200, rpc);
     return;
   }
 
