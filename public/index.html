@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Echo Suno Operator</title>
+    <style>
+      :root {
+        --bg: #0c0b09;
+        --fg: #f2ece3;
+        --muted: #9c9488;
+        --border: #2c2822;
+        --surface: #151310;
+        --accent: #e8e0d4;
+        --ok: #7d9a78;
+        --danger: #c45c4a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 16px/1.5 Outfit, Segoe UI, system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      main { max-width: 36rem; margin: 0 auto; padding: 2.5rem 1.25rem; }
+      .kicker { font-size: 0.75rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+      h1 { font-family: Fraunces, Georgia, serif; font-weight: 500; letter-spacing: -0.03em; margin: 0.3rem 0 0.75rem; }
+      p { color: var(--muted); }
+      textarea, button {
+        width: 100%;
+        font: inherit;
+        border-radius: 8px;
+      }
+      textarea {
+        min-height: 8rem;
+        background: var(--surface);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        padding: 0.75rem;
+      }
+      button {
+        margin-top: 0.75rem;
+        height: 2.75rem;
+        border: 0;
+        background: var(--accent);
+        color: var(--bg);
+        cursor: pointer;
+      }
+      button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+      #out { margin-top: 1.25rem; font-size: 0.875rem; white-space: pre-wrap; }
+      .ok { color: var(--ok); }
+      .bad { color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="kicker">Private · your Suno account</p>
+      <h1>Operator</h1>
+      <p>
+        Paste the Cookie header from suno.com while you are signed in. It is encrypted here.
+        Grok and GPT never see it. This is not the public API plugin.
+      </p>
+      <textarea id="cookie" placeholder="__client=...; __session=..."></textarea>
+      <button type="button" id="save">Save session</button>
+      <button type="button" class="ghost" id="status">Check status</button>
+      <button type="button" class="ghost" id="clear">Clear vault</button>
+      <pre id="out"></pre>
+    </main>
+    <script>
+      const out = document.getElementById("out");
+      async function call(path, body) {
+        const res = await fetch(path, {
+          method: body ? "POST" : "GET",
+          headers: body ? { "Content-Type": "application/json" } : {},
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const data = await res.json();
+        out.className = data.authenticated || data.ok ? "ok" : "bad";
+        out.textContent = JSON.stringify(data, null, 2);
+      }
+      document.getElementById("save").onclick = () =>
+        call("/v1/session", { cookie: document.getElementById("cookie").value });
+      document.getElementById("status").onclick = () => call("/v1/status");
+      document.getElementById("clear").onclick = () => call("/v1/session/clear", {});
+      call("/v1/status");
+    </script>
+  </body>
+</html>

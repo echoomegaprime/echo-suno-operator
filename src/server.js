@@ -1,0 +1,137 @@
+import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { saveCookie, readCookie, clearCookie, publicHint } from "./vault.js";
+import { generate, poll, whoAmI } from "./suno.js";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const PORT = Number(process.env.PORT || 8788);
+
+function json(res, code, body) {
+  const data = JSON.stringify(body);
+  res.writeHead(code, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  res.end(data);
+}
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw) return {};
+  return JSON.parse(raw);
+}
+
+async function handle(req, res) {
+  const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
+
+  if (req.method === "GET" && url.pathname === "/") {
+    const html = await readFile(join(root, "public/index.html"), "utf8");
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(html);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/status") {
+    const cookie = await readCookie();
+    if (!cookie) {
+      json(res, 200, {
+        authenticated: false,
+        hint: publicHint(),
+        error: "No session in vault",
+      });
+      return;
+    }
+    try {
+      const me = await whoAmI(cookie);
+      json(res, 200, { ...me, hint: publicHint(), cookie_exposed: false });
+    } catch (err) {
+      json(res, 200, {
+        authenticated: false,
+        hint: publicHint(),
+        error: err.message,
+        cookie_exposed: false,
+      });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/session") {
+    const body = await readBody(req);
+    if (!body.cookie) {
+      json(res, 400, { ok: false, error: "cookie required" });
+      return;
+    }
+    await saveCookie(body.cookie);
+    const cookie = await readCookie();
+    try {
+      const me = await whoAmI(cookie);
+      json(res, 200, { ok: true, ...me, hint: publicHint(), cookie_exposed: false });
+    } catch (err) {
+      json(res, 200, {
+        ok: false,
+        stored: true,
+        error: err.message,
+        hint: publicHint(),
+        cookie_exposed: false,
+      });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/session/clear") {
+    await clearCookie();
+    json(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/generate") {
+    const body = await readBody(req);
+    if (body.confirmation !== "EXECUTE") {
+      json(res, 403, { ok: false, error: "CONFIRMATION_REQUIRED" });
+      return;
+    }
+    const cookie = await readCookie();
+    if (!cookie) {
+      json(res, 401, { ok: false, error: "NO_SESSION" });
+      return;
+    }
+    if (!body.prompt && !body.title) {
+      json(res, 400, { ok: false, error: "prompt required" });
+      return;
+    }
+    const result = await generate(cookie, body);
+    json(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/job") {
+    const cookie = await readCookie();
+    if (!cookie) {
+      json(res, 401, { ok: false, error: "NO_SESSION" });
+      return;
+    }
+    const ids = (url.searchParams.get("ids") || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const clips = await poll(cookie, ids);
+    json(res, 200, { clips });
+    return;
+  }
+
+  json(res, 404, { error: "not found" });
+}
+
+createServer((req, res) => {
+  handle(req, res).catch((err) => {
+    json(res, err.status || 500, {
+      ok: false,
+      error: err.message,
+      detail: err.body ?? null,
+      cookie_exposed: false,
+    });
+  });
+}).listen(PORT, "0.0.0.0", () => {
+  console.log(`echo-suno-operator http://0.0.0.0:${PORT}`);
+});
