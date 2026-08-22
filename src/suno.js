@@ -301,10 +301,12 @@ export async function generate(cookie, input) {
       create_session_token: crypto.randomUUID(),
       disable_volume_normalization: false,
       lyrics_model: "default",
-      // Audio Influence lives here: control_sliders.audio_weight (0-100). Only sent when a voice
-      // is selected or the caller set audio_influence — mirrors the web client's assembled object.
+      // Audio Influence lives here: control_sliders.audio_weight. The v2-web API requires the
+      // sliders as 0.0-1.0 FLOATS (the UI 0-100 / audioWeight is divided by 100); sending integers
+      // 400s with "slider value must be between 0.0 and 1.0". Only sent when a voice is selected or
+      // the caller set audio_influence — mirrors the web client's assembled object.
       ...(audioWeight !== null
-        ? { control_sliders: { weirdness_constraint: 50, style_weight: 50, audio_weight: audioWeight } }
+        ? { control_sliders: { weirdness_constraint: 0.5, style_weight: 0.5, audio_weight: audioWeight / 100 } }
         : {}),
     },
     override_fields: [],
