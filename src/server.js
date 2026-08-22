@@ -60,6 +60,16 @@ async function handle(req, res) {
     return;
   }
 
+  // Standalone preview of the embedded Apps-SDK component (same file the MCP
+  // serves as the ui:// resource). Lets us verify the panel renders + drives the
+  // Suno tools via the /v1 HTTP fallback before testing inside ChatGPT/Grok/Claude.
+  if (req.method === "GET" && (url.pathname === "/panel" || url.pathname === "/panel.html")) {
+    const html = await readFile(join(root, "public/panel.html"), "utf8");
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(html);
+    return;
+  }
+
   if (
     req.method === "GET" &&
     (url.pathname === `/.well-known/oauth-protected-resource${RESOURCE.path}` ||
@@ -78,7 +88,8 @@ async function handle(req, res) {
         ok: true,
         resource: RESOURCE.canonical,
         path: RESOURCE.path,
-        tools: ["suno_status", "suno_voices", "suno_generate", "suno_train_voice_guide", "suno_job"],
+        tools: ["suno_panel", "suno_status", "suno_voices", "suno_library", "suno_generate", "suno_train_voice_guide", "suno_job"],
+        ui_resource: "ui://widget/suno-studio.html",
       });
       return;
     }
