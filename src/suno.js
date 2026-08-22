@@ -165,10 +165,114 @@ export async function whoAmI(cookie) {
   };
 }
 
+/**
+ * List the owner's trained Voices (v5.5). Voices are surfaced by Suno's persona API:
+ * GET studio-api-prod.suno.com/api/persona/get-personas/?page=N (verified live via CDP capture
+ * of the Create > Voice panel, 2026-08-22). Each persona row carries id/name/image + ownership
+ * flags; `voice_persona_count` in the envelope counts the voice-type personas specifically.
+ * Returns an empty list (ok, not an error) when the owner has trained no voices yet.
+ * Never exposes the cookie.
+ */
+export async function voices(cookie) {
+  const { jwt } = await sessionJwt(cookie);
+  const deviceId = fallbackDeviceId();
+  const all = [];
+  let page = 1;
+  let envelope = {};
+  // Paginate defensively; cap at 50 pages so a malformed count can never loop forever.
+  for (; page <= 50; page++) {
+    const res = await fetch(`${GEN_API()}/api/persona/get-personas/?page=${page}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        "accept-language": "en",
+        "device-id": deviceId,
+        "browser-token": browserToken(),
+        Origin: "https://suno.com",
+        Referer: "https://suno.com/",
+      },
+    });
+    const text = await res.text();
+    let body = null;
+    try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text.slice(0, 400) }; }
+    if (!res.ok) {
+      const err = new Error(`Suno ${res.status} /api/persona/get-personas/`);
+      err.status = res.status;
+      err.body = body;
+      throw err;
+    }
+    envelope = body || {};
+    const rows = Array.isArray(body) ? body : body?.personas ?? body?.data ?? [];
+    for (const p of rows) all.push(p);
+    const total = Number(body?.total_results ?? rows.length);
+    if (!rows.length || all.length >= total) break;
+  }
+  const list = all.map((p) => ({
+    id: p?.id || p?.persona_id || null,
+    name: p?.name || p?.display_name || p?.persona_name || null,
+    image_url: p?.image_url || p?.image_s3_id || p?.avatar || null,
+    is_owned: p?.is_owned ?? null,
+    is_public: p?.is_public ?? null,
+    // Best-effort voice flag: the voices feature is persona-backed; keep any hint the API exposes.
+    is_voice: p?.is_voice ?? p?.is_vox_persona ?? p?.has_vox ?? null,
+  })).filter((v) => v.id);
+  return {
+    voices: list,
+    total_results: Number(envelope?.total_results ?? list.length),
+    voice_persona_count: envelope?.voice_persona_count ?? null,
+    max_voice_personas: envelope?.max_voice_personas ?? null,
+  };
+}
+
+/**
+ * Resolve an input.voice (a persona/voice UUID, or a case-insensitive voice NAME) to a persona id.
+ * Only hits the network when a voice was requested. Returns { id, name } or throws a clear error.
+ */
+async function resolveVoiceId(cookie, voice) {
+  const wanted = String(voice).trim();
+  if (!wanted) return null;
+  let listing;
+  try {
+    listing = await voices(cookie);
+  } catch (e) {
+    // If listing fails but the input already looks like an id, fall through and use it raw.
+    if (/^[0-9a-f-]{16,}$/i.test(wanted)) return { id: wanted, name: null };
+    throw e;
+  }
+  const byId = listing.voices.find((v) => v.id === wanted);
+  if (byId) return { id: byId.id, name: byId.name };
+  const byName = listing.voices.find(
+    (v) => v.name && v.name.toLowerCase() === wanted.toLowerCase()
+  );
+  if (byName) return { id: byName.id, name: byName.name };
+  // Not in the list. If it's UUID-shaped, trust it (list may be paginated/eventually-consistent).
+  if (/^[0-9a-f-]{16,}$/i.test(wanted)) return { id: wanted, name: null };
+  const names = listing.voices.map((v) => v.name).filter(Boolean);
+  const err = new Error(
+    `Voice not found: "${wanted}". ${names.length ? "Trained voices: " + names.join(", ") : "You have no trained voices yet — train one in-account first (see suno_train_voice_guide)."}`
+  );
+  err.status = 404;
+  throw err;
+}
+
 export async function generate(cookie, input) {
   const { jwt } = await sessionJwt(cookie);
   const claims = jwtClaims(jwt);
   const userTier = (claims.plan ? String(claims.plan).split(":")[0] : null) || null;
+
+  // v5.5 Voice: resolve the requested voice (id or name) to a persona id, and set Audio Influence.
+  // Verified body shape (CDP bundle capture 2026-08-22): a selected voice sets top-level
+  // `persona_id`; "Audio Influence" is `metadata.control_sliders.audio_weight` (0-100, client
+  // default 25). The Suno help doc recommends pushing Audio Influence HIGH when singing through a
+  // voice, so when a voice is set and no explicit value is given we default it to 75.
+  let resolvedVoice = null;
+  if (input.voice) resolvedVoice = await resolveVoiceId(cookie, input.voice);
+  let audioWeight = null;
+  if (input.audio_influence !== undefined && input.audio_influence !== null && input.audio_influence !== "") {
+    audioWeight = Math.max(0, Math.min(100, Math.round(Number(input.audio_influence))));
+  } else if (resolvedVoice) {
+    audioWeight = 75; // recommended-high default when singing through a voice
+  }
 
   // Custom (own-lyrics) vs simple (description) create — mirrors the web client's two modes.
   const custom = Boolean(input.custom || input.lyrics);
@@ -197,12 +301,17 @@ export async function generate(cookie, input) {
       create_session_token: crypto.randomUUID(),
       disable_volume_normalization: false,
       lyrics_model: "default",
+      // Audio Influence lives here: control_sliders.audio_weight (0-100). Only sent when a voice
+      // is selected or the caller set audio_influence — mirrors the web client's assembled object.
+      ...(audioWeight !== null
+        ? { control_sliders: { weirdness_constraint: 50, style_weight: 50, audio_weight: audioWeight } }
+        : {}),
     },
     override_fields: [],
     cover_clip_id: null,
     cover_start_s: null,
     cover_end_s: null,
-    persona_id: null,
+    persona_id: resolvedVoice ? resolvedVoice.id : null,
     artist_clip_id: null,
     artist_start_s: null,
     artist_end_s: null,
@@ -244,7 +353,53 @@ export async function generate(cookie, input) {
   const ids = (clips.length ? clips : [body])
     .map((c) => c?.id || c?.clip_id)
     .filter(Boolean);
-  return { ids, raw: body, model: input.mv || DEFAULT_MV, token_via: minted.via };
+  return {
+    ids,
+    raw: body,
+    model: input.mv || DEFAULT_MV,
+    token_via: minted.via,
+    voice: resolvedVoice ? { id: resolvedVoice.id, name: resolvedVoice.name } : null,
+    audio_influence: audioWeight,
+  };
+}
+
+/**
+ * Static training guide for creating a Suno v5.5 Voice. This is the ONE step that cannot be
+ * automated: Suno shows a random phrase and matches your live speech to the uploaded recording
+ * (anti-spoofing), so only the account owner, live and in-account, can complete it. Source:
+ * help.suno.com/en/articles/11362369 + /11362433 (Knowledge Forge suno-voices-v5-5-feature-flow).
+ */
+export function voiceGuide() {
+  return {
+    feature: "Suno v5.5 Voices",
+    what: "Sing Suno songs in your OWN voice (a vocal persona, not a frame-perfect clone). Replaces 'Personas' in the Create menu; Style Personas still live inside Voices. v5.5 (chirp-fenix) only.",
+    requirements: [
+      "Pro or Premier subscription",
+      "18+",
+      "Geo-limited (rolling out to more regions)",
+      "You must be the account owner — a voice can only be trained by its owner, live and in-account",
+    ],
+    can_automate: {
+      list_voices: "YES — suno_voices / GET /v1/voices",
+      generate_with_voice: "YES — suno_generate with voice + audio_influence, or POST /v1/generate",
+      train_voice: "NO — the live random-phrase verification (step 5) is an anti-spoof check that requires the human, live, in the account. This guide walks you through it.",
+    },
+    steps: [
+      "1. Go to Create and click 'Add Voice' (or 'Try Now' / the 'Voice' control in the Create panel).",
+      "2. Choose an audio source (3 options): use a voice from a song in your library · record in real time · upload a file.",
+      "3. Provide 15 seconds to 4 minutes of audio (pick your best ~2-minute segment). Acapella is best; background music is auto stem-split.",
+      "4. Preview, then click 'Use Voice'.",
+      "5. LIVE VERIFICATION (cannot be automated): Suno shows a random phrase — read it aloud in a quiet room. It matches your speech to the uploaded recording AND confirms you spoke the shown words.",
+      "6. Optionally set skill level, an image, and a voice name; check the rights-confirmation box, then Save.",
+    ],
+    then_use: "Once trained, list it with suno_voices and sing through it: suno_generate { voice: '<id or name>', audio_influence: 75, prompt: '<lyrics>', tags: '<style>', title: '<title>' }. Push Audio Influence high (0-100, default when a voice is set = 75) so your voice comes through strongly.",
+    limits: [
+      "Private: only you can generate with your voice. Voices cannot be shared directly.",
+      "Published songs can be remixed/covered by others only if you allow it in publish settings.",
+      "v5.5 (chirp-fenix) only.",
+    ],
+    note: "Suno Voices SING. ElevenLabs professional voice clones only SPEAK — an ElevenLabs render of a song comes out spoken-word. To get your voice SINGING over a Suno beat, train a Voice here (the one live step) then generate through it.",
+  };
 }
 
 export async function poll(cookie, ids) {

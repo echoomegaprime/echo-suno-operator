@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { saveCookie, readCookie, clearCookie, publicHint } from "./vault.js";
-import { generate, poll, whoAmI } from "./suno.js";
+import { generate, poll, whoAmI, voices, voiceGuide } from "./suno.js";
 import { handleMcp, RESOURCE, resourceMeta } from "./mcp.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -65,7 +65,7 @@ async function handle(req, res) {
         ok: true,
         resource: RESOURCE.canonical,
         path: RESOURCE.path,
-        tools: ["suno_status", "suno_generate", "suno_job"],
+        tools: ["suno_status", "suno_voices", "suno_generate", "suno_train_voice_guide", "suno_job"],
       });
       return;
     }
@@ -101,6 +101,31 @@ async function handle(req, res) {
         cookie_exposed: false,
       });
     }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/voices") {
+    const cookie = await readCookie();
+    if (!cookie) {
+      json(res, 401, { ok: false, error: "NO_SESSION", cookie_exposed: false });
+      return;
+    }
+    try {
+      const result = await voices(cookie);
+      json(res, 200, { ok: true, ...result, cookie_exposed: false });
+    } catch (err) {
+      json(res, err.status || 500, {
+        ok: false,
+        error: err.message,
+        detail: err.body ?? null,
+        cookie_exposed: false,
+      });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/voice-guide") {
+    json(res, 200, { ok: true, guide: voiceGuide() });
     return;
   }
 
