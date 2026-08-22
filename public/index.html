@@ -1,88 +1,258 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Echo Suno Operator</title>
-    <style>
-      :root {
-        --bg: #0c0b09;
-        --fg: #f2ece3;
-        --muted: #9c9488;
-        --border: #2c2822;
-        --surface: #151310;
-        --accent: #e8e0d4;
-        --ok: #7d9a78;
-        --danger: #c45c4a;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font: 16px/1.5 Outfit, Segoe UI, system-ui, sans-serif;
-        background: var(--bg);
-        color: var(--fg);
-      }
-      main { max-width: 36rem; margin: 0 auto; padding: 2.5rem 1.25rem; }
-      .kicker { font-size: 0.75rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
-      h1 { font-family: Fraunces, Georgia, serif; font-weight: 500; letter-spacing: -0.03em; margin: 0.3rem 0 0.75rem; }
-      p { color: var(--muted); }
-      textarea, button {
-        width: 100%;
-        font: inherit;
-        border-radius: 8px;
-      }
-      textarea {
-        min-height: 8rem;
-        background: var(--surface);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        padding: 0.75rem;
-      }
-      button {
-        margin-top: 0.75rem;
-        height: 2.75rem;
-        border: 0;
-        background: var(--accent);
-        color: var(--bg);
-        cursor: pointer;
-      }
-      button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-      #out { margin-top: 1.25rem; font-size: 0.875rem; white-space: pre-wrap; }
-      .ok { color: var(--ok); }
-      .bad { color: var(--danger); }
-    </style>
-  </head>
-  <body>
-    <main>
-      <p class="kicker">Private · your Suno account</p>
-      <h1>Operator</h1>
-      <p>
-        Paste the Cookie header from suno.com while you are signed in. It is encrypted here.
-        Grok and GPT never see it. This is not the public API plugin.
-      </p>
-      <textarea id="cookie" placeholder="__client=...; __session=..."></textarea>
-      <button type="button" id="save">Save session</button>
-      <button type="button" class="ghost" id="status">Check status</button>
-      <button type="button" class="ghost" id="clear">Clear vault</button>
-      <pre id="out"></pre>
-    </main>
-    <script>
-      const out = document.getElementById("out");
-      async function call(path, body) {
-        const res = await fetch(path, {
-          method: body ? "POST" : "GET",
-          headers: body ? { "Content-Type": "application/json" } : {},
-          body: body ? JSON.stringify(body) : undefined,
-        });
-        const data = await res.json();
-        out.className = data.authenticated || data.ok ? "ok" : "bad";
-        out.textContent = JSON.stringify(data, null, 2);
-      }
-      document.getElementById("save").onclick = () =>
-        call("/v1/session", { cookie: document.getElementById("cookie").value });
-      document.getElementById("status").onclick = () => call("/v1/status");
-      document.getElementById("clear").onclick = () => call("/v1/session/clear", {});
-      call("/v1/status");
-    </script>
-  </body>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ECHO Suno Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0a0f; --bg2:#12121b; --panel:#15151f; --panel2:#1b1b28;
+    --line:#26263a; --txt:#e8e8f2; --dim:#9a9ab0; --faint:#63637a;
+    --acc:#7c5cff; --acc2:#22d3ee; --hot:#ff3b6b; --ok:#25d980; --warn:#ffb020;
+    --grad:linear-gradient(135deg,#7c5cff 0%,#22d3ee 100%);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 700px at 80% -10%,rgba(124,92,255,.18),transparent 60%),
+               radial-gradient(1000px 600px at -10% 110%,rgba(34,211,238,.12),transparent 55%),var(--bg);
+    color:var(--txt);font-family:Inter,system-ui,sans-serif;font-size:15px;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--acc2);text-decoration:none}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+  header{display:flex;align-items:center;gap:16px;margin-bottom:26px;flex-wrap:wrap}
+  .logo{display:flex;align-items:center;gap:12px}
+  .mark{width:42px;height:42px;border-radius:12px;background:var(--grad);display:grid;place-items:center;
+         box-shadow:0 8px 30px rgba(124,92,255,.35)}
+  .mark svg{width:24px;height:24px;color:#0a0a0f}
+  h1{font-family:'Space Grotesk',sans-serif;font-size:20px;letter-spacing:.02em;margin:0}
+  h1 span{color:var(--faint);font-weight:500}
+  .spacer{flex:1}
+  .chip{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);
+        padding:8px 14px;border-radius:999px;font-size:13px}
+  .chip b{font-family:'Space Grotesk',sans-serif}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+  .dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .grid{display:grid;grid-template-columns:1fr 1.15fr;gap:22px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);
+         border-radius:18px;padding:20px}
+  .panel h2{font-family:'Space Grotesk',sans-serif;font-size:14px;letter-spacing:.08em;text-transform:uppercase;
+            color:var(--dim);margin:0 0 16px}
+  label{display:block;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:14px 0 6px}
+  input[type=text],textarea,select{
+    width:100%;background:var(--bg);border:1px solid var(--line);color:var(--txt);
+    border-radius:11px;padding:11px 13px;font-family:inherit;font-size:14px;outline:none;transition:.15s}
+  input:focus,textarea:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(124,92,255,.18)}
+  textarea{min-height:190px;resize:vertical;line-height:1.6;font-size:13.5px}
+  .row{display:flex;gap:12px}.row>*{flex:1}
+  .slider{display:flex;align-items:center;gap:12px}
+  input[type=range]{-webkit-appearance:none;height:6px;border-radius:6px;background:var(--line);width:100%}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;
+    background:var(--grad);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+  .infl{font-family:'Space Grotesk';min-width:42px;text-align:right;color:var(--acc2)}
+  .toggle{display:flex;align-items:center;gap:10px;margin-top:6px;color:var(--dim);font-size:13px;cursor:pointer}
+  .toggle input{display:none}
+  .sw{width:40px;height:22px;border-radius:999px;background:var(--line);position:relative;transition:.2s}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
+  .toggle input:checked+.sw{background:var(--acc)}
+  .toggle input:checked+.sw::after{left:20px}
+  .btn{margin-top:20px;width:100%;border:none;cursor:pointer;font-family:'Space Grotesk',sans-serif;
+       font-size:15px;font-weight:700;letter-spacing:.04em;color:#0a0a0f;background:var(--grad);
+       padding:14px;border-radius:12px;transition:.15s;box-shadow:0 10px 30px rgba(124,92,255,.3)}
+  .btn:hover{transform:translateY(-1px);filter:brightness(1.06)}
+  .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .hint{font-size:12px;color:var(--faint);margin-top:10px}
+  .tracks{display:flex;flex-direction:column;gap:14px;max-height:78vh;overflow:auto;padding-right:4px}
+  .track{display:flex;gap:14px;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px}
+  .cover{width:72px;height:72px;border-radius:10px;object-fit:cover;background:var(--bg);flex-shrink:0;
+         display:grid;place-items:center;color:var(--faint)}
+  .tinfo{flex:1;min-width:0}
+  .ttitle{font-family:'Space Grotesk';font-weight:500;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 9px;border-radius:999px;
+         text-transform:uppercase;letter-spacing:.05em;margin-top:4px}
+  .b-queued{background:rgba(255,176,32,.14);color:var(--warn)}
+  .b-streaming{background:rgba(34,211,238,.14);color:var(--acc2)}
+  .b-complete{background:rgba(37,217,128,.14);color:var(--ok)}
+  .b-error{background:rgba(255,59,107,.14);color:var(--hot)}
+  audio{width:100%;margin-top:9px;height:34px}
+  .empty{color:var(--faint);text-align:center;padding:50px 20px;font-size:14px}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--acc2);
+        border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .load-row{display:flex;gap:8px;margin-bottom:14px}
+  .load-row input{flex:1}
+  .mini{background:var(--panel);border:1px solid var(--line);color:var(--dim);border-radius:10px;
+        padding:0 14px;cursor:pointer;font-size:13px}
+  .mini:hover{color:var(--txt);border-color:var(--acc)}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);
+         border:1px solid var(--line);padding:12px 20px;border-radius:12px;font-size:14px;opacity:0;
+         transition:.25s;pointer-events:none;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">
+      <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+      <h1>ECHO Suno Studio <span>· voice = you</span></h1>
+    </div>
+    <div class="spacer"></div>
+    <div class="chip"><span class="dot" id="hdot"></span><span id="acct">connecting…</span></div>
+    <div class="chip">credits <b id="credits">—</b></div>
+    <div class="chip mini" id="lockbtn" title="Set your studio token" style="cursor:pointer">🔒 <span id="lockstate">token</span></div>
+  </header>
+
+  <div class="grid">
+    <!-- GENERATE -->
+    <section class="panel">
+      <h2>Create a track</h2>
+      <label>Title</label>
+      <input id="title" type="text" placeholder="COLD GAME" />
+
+      <div class="row">
+        <div>
+          <label>Voice</label>
+          <select id="voice"><option value="">Default Suno singer</option></select>
+        </div>
+        <div>
+          <label>Audio influence</label>
+          <div class="slider"><input id="infl" type="range" min="0" max="100" value="80"><span class="infl" id="inflv">80</span></div>
+        </div>
+      </div>
+
+      <label style="margin-top:14px">Style / tags</label>
+      <input id="tags" type="text" placeholder="hardcore west coast gangsta rap, g-funk, heavy 808 bass, aggressive male vocal" />
+
+      <label>Lyrics <span style="color:var(--faint);text-transform:none;letter-spacing:0">(use [Chorus] / [Verse] tags)</span></label>
+      <textarea id="lyrics" placeholder="[Chorus]&#10;your bars here…&#10;&#10;[Verse 1]&#10;…"></textarea>
+
+      <label class="toggle"><input type="checkbox" id="instr"><span class="sw"></span>Instrumental (no vocals)</label>
+
+      <button class="btn" id="go">▶  GENERATE  (10 credits)</button>
+      <div class="hint" id="ghint">Your voice attaches automatically when a Voice is selected. Two takes render per generation.</div>
+    </section>
+
+    <!-- LIBRARY -->
+    <section class="panel">
+      <h2>Your tracks</h2>
+      <div class="load-row">
+        <input id="loadid" type="text" placeholder="Paste a Suno clip id to load & play…" />
+        <button class="mini" id="loadbtn">Load</button>
+      </div>
+      <div class="tracks" id="tracks"><div class="empty">No tracks yet — generate one on the left.</div></div>
+    </section>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const T = new Map();               // id -> track state
+const KEY = "echo_suno_tracks";
+let polling = false;
+
+function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(t._);t._=setTimeout(()=>t.classList.remove("show"),2600);}
+function saveIds(){localStorage.setItem(KEY, JSON.stringify([...T.keys()]));}
+function loadIds(){try{return JSON.parse(localStorage.getItem(KEY)||"[]")}catch{return[]}}
+
+const TKEY="echo_suno_token";
+function getTok(){return localStorage.getItem(TKEY)||"";}
+function setTok(){const cur=getTok();const v=prompt("Enter your Studio token (from the operator .env SUNO_UI_TOKEN). Leave blank to clear.",cur);if(v!==null){localStorage.setItem(TKEY,v.trim());$("#lockstate").textContent=v.trim()?"unlocked":"token";toast(v.trim()?"Token saved":"Token cleared");}}
+async function api(path, opts){const o=opts||{};o.headers={...(o.headers||{}),"x-suno-token":getTok()};const r=await fetch(path,o);return r.json();}
+
+async function refreshStatus(){
+  try{
+    const s = await api("/v1/status");
+    $("#acct").textContent = s.authenticated ? (s.name||"authenticated") : "not authenticated";
+    $("#hdot").classList.toggle("on", !!s.authenticated);
+    if(s.credits!=null) $("#credits").textContent = s.credits;
+  }catch{ $("#acct").textContent="operator offline"; }
+}
+async function loadVoices(){
+  try{
+    const v = await api("/v1/voices");
+    const sel = $("#voice");
+    (v.voices||[]).forEach(x=>{
+      const o=document.createElement("option");o.value=x.name||x.id;o.textContent="🎙  "+(x.name||x.id);sel.appendChild(o);
+    });
+    if((v.voices||[]).length===0){$("#ghint").innerHTML="No trained voice yet — it'll sing with a default singer. Train one in Suno → Create → Add Voice, then it appears here.";}
+  }catch{}
+}
+
+function badge(st){const m={queued:"b-queued",submitted:"b-queued",streaming:"b-streaming",complete:"b-complete",error:"b-error"};return m[st]||"b-queued";}
+function icon(){return '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';}
+
+function render(){
+  const box=$("#tracks");
+  if(T.size===0){box.innerHTML='<div class="empty">No tracks yet — generate one on the left.</div>';return;}
+  box.innerHTML="";
+  [...T.values()].reverse().forEach(t=>{
+    const el=document.createElement("div");el.className="track";
+    const pending = !t.audio_url;
+    el.innerHTML=`
+      ${t.image_url?`<img class="cover" src="${t.image_url}">`:`<div class="cover">${icon()}</div>`}
+      <div class="tinfo">
+        <div class="ttitle">${t.title||"Untitled"}</div>
+        <span class="badge ${badge(t.status)}">${pending?'<span class="spin"></span> ':''}${t.status||"queued"}</span>
+        ${t.audio_url?`<audio controls preload="none" src="${t.audio_url}"></audio>`:`<div class="hint">rendering… your voice is being applied</div>`}
+      </div>`;
+    box.appendChild(el);
+  });
+}
+
+async function pollLoop(){
+  if(polling) return; polling=true;
+  while(true){
+    const pending=[...T.values()].filter(t=>!t.audio_url || (t.status&&t.status!=="complete"));
+    if(pending.length===0){polling=false;return;}
+    try{
+      const ids=pending.map(t=>t.id).join(",");
+      const j=await api("/v1/job?ids="+encodeURIComponent(ids));
+      const clips=Array.isArray(j)?j:(j.clips||j.items||[]);
+      clips.forEach(c=>{ if(T.has(c.id)){ Object.assign(T.get(c.id),{status:c.status,audio_url:c.audio_url,image_url:c.image_url,title:c.title||T.get(c.id).title}); }});
+      render(); saveIds();
+    }catch{}
+    await new Promise(r=>setTimeout(r,5000));
+  }
+}
+
+function track(id, seed={}){ if(!T.has(id)) T.set(id,{id,status:"queued",title:seed.title||"",audio_url:null,image_url:null}); else Object.assign(T.get(id),seed); }
+
+async function generate(){
+  const btn=$("#go");
+  const body={
+    confirmation:"EXECUTE",
+    title:$("#title").value.trim()||"Untitled",
+    lyrics:$("#lyrics").value,
+    custom: $("#lyrics").value.trim().length>0,
+    tags:$("#tags").value.trim(),
+    voice:$("#voice").value||undefined,
+    audio_influence:Number($("#infl").value),
+    instrumental:$("#instr").checked
+  };
+  btn.disabled=true;btn.textContent="◌  GENERATING…";
+  try{
+    const r=await api("/v1/generate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    if(r.error==="UNAUTHORIZED"){toast("Enter your studio token to generate");setTok();}
+    else if(!r.ok){toast("Suno: "+(r.error||"generate failed"));}
+    else{ (r.ids||[]).forEach(id=>track(id,{title:body.title})); render(); saveIds(); pollLoop(); toast("Rendering "+(r.ids||[]).length+" take(s) in "+($("#voice").value||"default voice")); refreshStatus(); }
+  }catch(e){toast("network error");}
+  btn.disabled=false;btn.textContent="▶  GENERATE  (10 credits)";
+}
+
+$("#infl").addEventListener("input",e=>$("#inflv").textContent=e.target.value);
+$("#go").addEventListener("click",generate);
+$("#loadbtn").addEventListener("click",()=>{const id=$("#loadid").value.trim();if(id){track(id);render();saveIds();pollLoop();$("#loadid").value="";}});
+
+$("#lockbtn").addEventListener("click",setTok);
+// boot
+(async()=>{ $("#lockstate").textContent=getTok()?"unlocked":"token"; await refreshStatus(); await loadVoices(); loadIds().forEach(id=>track(id)); render(); if(T.size) pollLoop(); setInterval(refreshStatus,30000); })();
+</script>
+</body>
 </html>

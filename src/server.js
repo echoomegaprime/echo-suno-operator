@@ -9,6 +9,19 @@ import { handleMcp, RESOURCE, resourceMeta } from "./mcp.js";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 8788);
 
+// Optional write-gate for the public studio UI: when SUNO_UI_TOKEN is set, credit-spending /
+// session endpoints require a matching `x-suno-token` header so a random visitor to the public
+// URL cannot spend the owner's Suno credits. Read endpoints (status/voices/job/voice-guide) and
+// the MCP connector path stay open — the connectors (Claude/GPT/Grok) are unaffected.
+const UI_TOKEN = process.env.SUNO_UI_TOKEN || "";
+function gated(req, res) {
+  if (UI_TOKEN && req.headers["x-suno-token"] !== UI_TOKEN) {
+    json(res, 401, { ok: false, error: "UNAUTHORIZED", hint: "enter your studio token to generate" });
+    return true;
+  }
+  return false;
+}
+
 function json(res, code, body) {
   const data = JSON.stringify(body);
   res.writeHead(code, {
@@ -130,6 +143,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/v1/session") {
+    if (gated(req, res)) return;
     const body = await readBody(req);
     if (!body.cookie) {
       json(res, 400, { ok: false, error: "cookie required" });
@@ -153,12 +167,14 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/v1/session/clear") {
+    if (gated(req, res)) return;
     await clearCookie();
     json(res, 200, { ok: true });
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/v1/generate") {
+    if (gated(req, res)) return;
     const body = await readBody(req);
     if (body.confirmation !== "EXECUTE") {
       json(res, 403, { ok: false, error: "CONFIRMATION_REQUIRED" });
