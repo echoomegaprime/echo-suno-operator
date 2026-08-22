@@ -419,6 +419,26 @@ export function voiceGuide() {
   };
 }
 
+/**
+ * The owner's recent Suno library (all their songs), newest first. Studio UI loads this on open
+ * so every track the owner has made appears with a player — not just ones made in this browser.
+ * GET studio-api.prod.suno.com/api/feed/?page=N (verified 2026-08-22: page 0 returns 20 clips,
+ * COLD GAME at top). Never exposes the cookie.
+ */
+export async function library(cookie, page = 0) {
+  const body = await studio(cookie, `/api/feed/?page=${page}`);
+  const list = Array.isArray(body) ? body : body?.clips ?? body?.data ?? [];
+  return list.map((c) => ({
+    id: c.id,
+    title: c.title,
+    status: c.status,
+    audio_url: c.audio_url || c.audio_url_wav || null,
+    image_url: c.image_url || null,
+    created: c.created_at || null,
+    metadata: c.metadata || null,
+  }));
+}
+
 export async function poll(cookie, ids) {
   const q = ids.filter(Boolean).join(",");
   if (!q) return [];

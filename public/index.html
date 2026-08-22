@@ -224,6 +224,15 @@ async function pollLoop(){
 
 function track(id, seed={}){ if(!T.has(id)) T.set(id,{id,status:"queued",title:seed.title||"",audio_url:null,image_url:null}); else Object.assign(T.get(id),seed); }
 
+async function loadLibrary(){
+  try{
+    const j = await api("/v1/library");
+    (j.clips||[]).forEach(c=>{ track(c.id); Object.assign(T.get(c.id),{title:c.title||T.get(c.id).title,status:c.status,audio_url:c.audio_url,image_url:c.image_url}); });
+    render(); saveIds();
+    const pend=[...T.values()].some(t=>!t.audio_url||t.status!=="complete"); if(pend) pollLoop();
+  }catch{}
+}
+
 async function generate(){
   const btn=$("#go");
   const body={
@@ -252,7 +261,7 @@ $("#loadbtn").addEventListener("click",()=>{const id=$("#loadid").value.trim();i
 
 $("#lockbtn").addEventListener("click",setTok);
 // boot
-(async()=>{ $("#lockstate").textContent=getTok()?"unlocked":"token"; await refreshStatus(); await loadVoices(); loadIds().forEach(id=>track(id)); render(); if(T.size) pollLoop(); setInterval(refreshStatus,30000); })();
+(async()=>{ $("#lockstate").textContent=getTok()?"unlocked":"token"; await refreshStatus(); await loadVoices(); loadIds().forEach(id=>track(id)); render(); await loadLibrary(); setInterval(refreshStatus,30000); })();
 </script>
 </body>
 </html>

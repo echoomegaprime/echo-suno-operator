@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { saveCookie, readCookie, clearCookie, publicHint } from "./vault.js";
-import { generate, poll, whoAmI, voices, voiceGuide } from "./suno.js";
+import { generate, poll, whoAmI, voices, voiceGuide, library } from "./suno.js";
 import { handleMcp, RESOURCE, resourceMeta } from "./mcp.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -203,6 +203,18 @@ async function handle(req, res) {
     const ids = (url.searchParams.get("ids") || "").split(",").map((s) => s.trim()).filter(Boolean);
     const clips = await poll(cookie, ids);
     json(res, 200, { clips });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/library") {
+    const cookie = await readCookie();
+    if (!cookie) {
+      json(res, 401, { ok: false, error: "NO_SESSION" });
+      return;
+    }
+    const page = Number(url.searchParams.get("page") || 0);
+    const clips = await library(cookie, page);
+    json(res, 200, { ok: true, clips });
     return;
   }
 
