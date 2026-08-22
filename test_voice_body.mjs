@@ -1,6 +1,7 @@
 // Dry proof: stub global fetch, call generate() with a voice + audio_influence, and assert the
-// outgoing v2-web body carries persona_id and metadata.control_sliders.audio_weight. No real
-// Suno traffic, no credits spent. Also checks the no-voice body stays clean, and name-resolution.
+// outgoing v2-web body matches the REAL browser voice-generation body captured over CDP 2026-08-22.
+// The voice-application field is top-level `task: "vox"` (persona_id alone is accepted but ignored).
+// No real Suno traffic, no credits spent. Also checks the no-voice body stays clean, and name-res.
 import { generate, voices } from "./src/suno.js";
 
 const realFetch = global.fetch;
@@ -47,23 +48,30 @@ capturedGenBody = null;
 const uuid = "0f2b1c9a-1234-4abc-9def-0123456789ab";
 const r1 = await generate(COOKIE, { voice: uuid, audio_influence: 90, custom: true, lyrics: "la la la", tags: "pop", title: "T" });
 console.log("[1] voice=UUID, audio_influence=90");
+ok(capturedGenBody.task === "vox", "task == 'vox' (THE voice-application field)");
 ok(capturedGenBody.persona_id === uuid, "persona_id == the voice id");
-ok(capturedGenBody.metadata?.control_sliders?.audio_weight === 90, "control_sliders.audio_weight == 90");
-ok(capturedGenBody.metadata.control_sliders.weirdness_constraint === 50 && capturedGenBody.metadata.control_sliders.style_weight === 50, "other sliders default to 50");
+ok(JSON.stringify(capturedGenBody.override_fields) === JSON.stringify(["prompt", "tags"]), "override_fields == ['prompt','tags'] on the voice path");
+ok(capturedGenBody.artist_clip_id === null, "artist_clip_id stays null (not the mechanism)");
+ok(capturedGenBody.token === null && capturedGenBody.token_provider === null, "token + token_provider are explicit null when no minted token");
+ok(capturedGenBody.metadata?.control_sliders?.audio_weight === 0.9, "control_sliders.audio_weight == 0.9 (90/100 float)");
+ok(capturedGenBody.metadata.control_sliders.weirdness_constraint === 0.5 && capturedGenBody.metadata.control_sliders.style_weight === 0.5, "other sliders default to 0.5 float");
 ok(r1.voice?.id === uuid && r1.audio_influence === 90, "result surfaces voice + audio_influence");
 
 // 2) voice with NO audio_influence -> defaults to 75 (recommended high)
 capturedGenBody = null;
 await generate(COOKIE, { voice: uuid, custom: true, lyrics: "x", title: "T" });
 console.log("[2] voice set, no audio_influence");
+ok(capturedGenBody.task === "vox", "task == 'vox'");
 ok(capturedGenBody.persona_id === uuid, "persona_id set");
-ok(capturedGenBody.metadata?.control_sliders?.audio_weight === 75, "audio_weight defaults to 75");
+ok(capturedGenBody.metadata?.control_sliders?.audio_weight === 0.75, "audio_weight defaults to 0.75 float");
 
-// 3) NO voice -> clean body (persona_id null, no control_sliders)
+// 3) NO voice -> clean body (no task, persona_id null, no control_sliders, empty override_fields)
 capturedGenBody = null;
 await generate(COOKIE, { custom: true, lyrics: "y", title: "T" });
 console.log("[3] no voice");
+ok(capturedGenBody.task === undefined, "no 'task' field on the no-voice path");
 ok(capturedGenBody.persona_id === null, "persona_id is null");
+ok(JSON.stringify(capturedGenBody.override_fields) === JSON.stringify([]), "override_fields == [] with no voice");
 ok(capturedGenBody.metadata?.control_sliders === undefined, "no control_sliders when no voice/influence");
 
 // 4) voice by NAME when owner has none -> helpful 404
@@ -79,8 +87,9 @@ try {
 capturedGenBody = null;
 await generate(COOKIE, { audio_influence: 40, custom: true, lyrics: "w", title: "T" });
 console.log("[5] audio_influence only");
-ok(capturedGenBody.metadata?.control_sliders?.audio_weight === 40, "audio_weight == 40, persona_id null");
+ok(capturedGenBody.metadata?.control_sliders?.audio_weight === 0.4, "audio_weight == 0.4 float, persona_id null");
 ok(capturedGenBody.persona_id === null, "persona_id null");
+ok(capturedGenBody.task === undefined, "no 'task' field without a voice");
 
 global.fetch = realFetch;
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);

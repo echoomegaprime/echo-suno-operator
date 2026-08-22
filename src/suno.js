@@ -261,10 +261,13 @@ export async function generate(cookie, input) {
   const userTier = (claims.plan ? String(claims.plan).split(":")[0] : null) || null;
 
   // v5.5 Voice: resolve the requested voice (id or name) to a persona id, and set Audio Influence.
-  // Verified body shape (CDP bundle capture 2026-08-22): a selected voice sets top-level
-  // `persona_id`; "Audio Influence" is `metadata.control_sliders.audio_weight` (0-100, client
-  // default 25). The Suno help doc recommends pushing Audio Influence HIGH when singing through a
-  // voice, so when a voice is set and no explicit value is given we default it to 75.
+  // Verified body shape (CDP Network.getRequestPostData capture of a REAL browser voice generation,
+  // 2026-08-22, byte-identical inline + CDP): what actually APPLIES the voice is top-level
+  // `task: "vox"` — persona_id alone is accepted but IGNORED (server returns a default-singer song).
+  // "Audio Influence" is `metadata.control_sliders.audio_weight` (0.0-1.0 float), but the browser
+  // sent NO control_sliders at the default slider, so audio_weight is NOT the application mechanism;
+  // task:"vox" is. We still push audio_weight high (0.75) by default so the voice comes through
+  // strongly, per Suno's help doc, but the voice applies regardless of the slider.
   let resolvedVoice = null;
   if (input.voice) resolvedVoice = await resolveVoiceId(cookie, input.voice);
   let audioWeight = null;
@@ -283,12 +286,20 @@ export async function generate(cookie, input) {
   const minted = await mintTurnstile();
   const deviceId = minted.deviceId || fallbackDeviceId();
 
+  // `task: "vox"` is the field that ROUTES the generation through the voice/vox model. It is set
+  // ONLY when a voice is resolved; the no-voice path omits it entirely (no capture of a no-voice
+  // body carrying `task`, so we don't invent one). Verified against a real browser voice generation.
+  const isVoiceGen = Boolean(resolvedVoice);
   const payload = {
     generation_type: "TEXT",
+    ...(isVoiceGen ? { task: "vox" } : {}),
     mv: input.mv || DEFAULT_MV,
     prompt: lyrics,                         // lyrics for custom mode; "" for simple/description mode
-    gpt_description_prompt: description,     // the "Song Description" box
+    // gpt_description_prompt is the SIMPLE-mode "Song Description" box. The custom/Advanced mode
+    // body omits it entirely (matches the captured browser body), so only send it in simple mode.
+    gpt_description_prompt: custom ? undefined : description,
     tags: custom ? (input.tags || "") : undefined,
+    negative_tags: input.negative_tags || "",   // browser always sends this (empty by default)
     title: input.title || "",
     make_instrumental: Boolean(input.instrumental),
     user_uploaded_images_b64: null,
@@ -304,12 +315,15 @@ export async function generate(cookie, input) {
       // Audio Influence lives here: control_sliders.audio_weight. The v2-web API requires the
       // sliders as 0.0-1.0 FLOATS (the UI 0-100 / audioWeight is divided by 100); sending integers
       // 400s with "slider value must be between 0.0 and 1.0". Only sent when a voice is selected or
-      // the caller set audio_influence — mirrors the web client's assembled object.
+      // the caller set audio_influence — mirrors the web client's assembled object. NOTE: the
+      // browser omits this at the default slider; it is optional and does NOT apply the voice.
       ...(audioWeight !== null
         ? { control_sliders: { weirdness_constraint: 0.5, style_weight: 0.5, audio_weight: audioWeight / 100 } }
         : {}),
     },
-    override_fields: [],
+    // The browser declares which user-set fields override the persona defaults; for a voice
+    // generation it sends ["prompt","tags"]. The no-voice path stays [].
+    override_fields: isVoiceGen ? ["prompt", "tags"] : [],
     cover_clip_id: null,
     cover_start_s: null,
     cover_end_s: null,
@@ -321,8 +335,9 @@ export async function generate(cookie, input) {
     continued_aligned_prompt: null,
     continue_at: null,
     transaction_uuid: crypto.randomUUID(),
-    token_provider: 2,
-    ...(minted.token ? { token: minted.token } : {}),
+    // The browser sends token/token_provider as explicit nulls when no Turnstile token is attached,
+    // and token_provider:2 only alongside a minted token.
+    ...(minted.token ? { token: minted.token, token_provider: 2 } : { token: null, token_provider: null }),
   };
   // Drop undefined keys so the JSON matches the web client's body shape.
   for (const k of Object.keys(payload)) if (payload[k] === undefined) delete payload[k];
