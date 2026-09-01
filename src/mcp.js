@@ -378,6 +378,32 @@ function narrate(name, r) {
   return blocks;
 }
 
+// Provider and user-action failures are valid tool outcomes, not malformed MCP
+// calls. Returning MCP `isError` here causes connector hosts to collapse the
+// provider's useful error code into their own generic INVALID_ARGUMENT.
+export function recoverableToolErrorPayload(name, err) {
+  const errorCode = err?.body?.error_code;
+  if (name !== "suno_generate" || typeof errorCode !== "string" || !errorCode) {
+    return null;
+  }
+  const result = {
+    type: "sunoGenerate",
+    ok: false,
+    error: errorCode,
+    submitted: false,
+    user_action_required: errorCode === "CAPTCHA_REQUIRED",
+    studio_url: STUDIO_URL,
+  };
+  return {
+    content: narrate(name, result),
+    structuredContent: result,
+    _meta: {
+      "openai/outputTemplate": UI_TEMPLATE_URI,
+      ui: { resourceUri: UI_TEMPLATE_URI },
+    },
+  };
+}
+
 export async function handleMcp(body) {
   const id = body?.id ?? null;
   const method = body?.method;
@@ -454,6 +480,8 @@ export async function handleMcp(body) {
       }
       return ok(id, payload);
     } catch (err) {
+      const recoverable = recoverableToolErrorPayload(name, err);
+      if (recoverable) return ok(id, recoverable);
       return ok(id, {
         isError: true,
         content: [{ type: "text", text: err.message }],
