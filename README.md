@@ -1,59 +1,64 @@
-# Echo Suno Operator — **private**
+# Echo Suno Operator
 
-This is **not** the public API plugin.
+Private, account-scoped Echo operator for the Commander's own Suno web session. Songs are created in that account's Suno library. This repository is not the public Suno Platform API plugin and must be hosted as a private repository.
 
-| Repo | What it is | Visibility |
+The operator never returns the provider cookie. It stores the session encrypted at rest, mints short-lived Clerk JWTs only inside the service, resolves the account's current plan/model contract at request time, performs CAPTCHA preflight, and refuses to submit when provider human verification is required.
+
+## Production request path
+
+```text
+Codex / ChatGPT / Claude / Grok
+  -> https://mcp.echo-op.com/oauth-mcp-suno-session-v1
+  -> Echo OAuth MCP connector (user token + scope validation)
+  -> shared-credential loopback proxy
+  -> Echo Suno operator
+  -> studio-api-prod.suno.com
+```
+
+The public edge must never route directly to the privileged MCP handler. The direct operator hostname exposes only a token-gated studio shell and protected health surfaces.
+
+## Security boundaries
+
+- OAuth scopes: `echo.suno.read` for status/jobs and `echo.suno.generate` for generation.
+- Backend MCP: requires a runtime-only `SUNO_PROXY_TOKEN` header shared with the OAuth connector.
+- Private REST state: requires `SUNO_UI_TOKEN` when configured.
+- Generation: requires `confirmation: "EXECUTE"`.
+- CAPTCHA: detected and reported as `CAPTCHA_REQUIRED`; never bypassed.
+- Cookies/tokens: never returned to MCP clients and prohibited from logs, source, PRs, or evidence.
+
+## Local development
+
+Copy `.env.example` to `.env`, provide a strong vault key, and use a development-only proxy credential. Do not use production cookies in an untrusted worktree.
+
+```text
+node src/server.js
+npm test
+```
+
+The default development port is `8788`; the HAMMER deployment sets `PORT=8789`. The Windows production task runs `run_suno.ps1`, which resolves its own directory, redirects logs, waits on the child, and starts Node with a hidden window.
+
+## MCP tools
+
+| Tool | Purpose | Required scope |
 | --- | --- | --- |
-| [echo-music-studio](https://github.com/echoomegaprime/echo-music-studio) | Official **Platform API** plugin. Grok / GPT / Claude / Qwen compose. Bearer key in vault. | **Public** |
-| **echo-suno-operator** (this) | Operates Echo against **your** suno.com account using a Clerk session cookie. Songs land in **your** library. | **Private** |
+| `suno_status` | Sanitized provider/account health | `echo.suno.read` |
+| `suno_generate` | Confirmed song generation | `echo.suno.generate` |
+| `suno_job` | Poll returned clip/job IDs | `echo.suno.read` |
 
-Suno Platform Google login is a different product. This operator uses the same session your browser already has on [suno.com/create](https://suno.com/create).
+Additional local studio tools remain backend-only and are not part of the minimal public OAuth surface.
 
-Unofficial. Your account only. Cookie never goes to Grok, GPT, Claude, or Qwen — only into this server’s encrypted vault.
+## Verification
 
-## Path
+Run `npm test`. A production acceptance pass additionally requires:
 
-```
-You → Grok / GPT / Claude / Qwen
-        → Echo operator (this box)
-        → encrypted Clerk session
-        → studio-api.suno.ai as YOUR Suno user
-```
+- exact local, remote-branch, and deployed SHA agreement;
+- secret scanning on the branch diff;
+- OAuth rejection of unauthenticated public MCP traffic;
+- authenticated internal status with `cookie_exposed: false`;
+- session-0 processes with `MainWindowHandle == 0`;
+- hosted CI, CodeQL, Certification Forge, and Release Sentinel evidence;
+- Commander signature on the exact-SHA certificate.
 
-## Run
+Run `npm run verify:public` from a networked verification host to prove that the public URL is owned by the scoped Suno OAuth service and fails closed before authentication. This probe sends no credentials and does not generate content.
 
-```bash
-cp .env.example .env
-# set VAULT_MASTER_KEY to a long random string
-node src/server.js     # 0.0.0.0:8788
-```
-
-Open the local page, paste the Cookie header, save. Status should show your Suno identity and credits.
-
-## Capture the cookie (your login only)
-
-1. Sign in at [suno.com/create](https://suno.com/create) with the **same SSO you originally used** (Google, Apple, Discord, Facebook, or Microsoft).
-2. DevTools → Network → refresh.
-3. Filter `__clerk_api_version`.
-4. Open that request → Request Headers → copy the entire **Cookie** value.
-5. Paste it here. Do not paste your password. Do not paste someone else’s cookie.
-
-Cookies expire. When generate starts 401-ing, paste a fresh one.
-
-## Endpoints
-
-| Method | Path | Notes |
-| --- | --- | --- |
-| GET | `/` | Paste UI |
-| GET | `/v1/status` | Identity + credits (no cookie returned) |
-| POST | `/v1/session` | `{ cookie }` → encrypt + probe |
-| POST | `/v1/session/clear` | Wipe vault |
-| POST | `/v1/generate` | `{ confirmation: "EXECUTE", title, prompt, tags, instrumental }` |
-| GET | `/v1/job?ids=` | Poll clip ids |
-
-## Do not
-
-- Commit `.data/` or `.env`
-- Put this cookie in the public API repo
-- Share the operator URL
-- Use anyone’s session but yours
+See `docs/PRODUCTION_RUNBOOK.md` for deployment and rollback, `docs/ARCHITECTURE.md` for trust boundaries, and `docs/INCIDENT-2026-09-01.md` for the repaired failure chain.

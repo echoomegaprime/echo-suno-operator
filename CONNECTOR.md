@@ -1,70 +1,23 @@
-# MCP connector — Grok, GPT, Claude
+# Echo Suno MCP connector
 
-Private operator. Cookie stays on this host.
+## Canonical resource
 
-## Resource
+`https://mcp.echo-op.com/oauth-mcp-suno-session-v1`
 
-| | |
-| --- | --- |
-| Resource id | `oauth-mcp-suno-session-v1` |
-| Path | `/oauth-mcp-suno-session-v1` |
-| Canonical (when on Echo edge) | `https://mcp.echo-op.com/oauth-mcp-suno-session-v1` |
-| Local | `http://127.0.0.1:8788/oauth-mcp-suno-session-v1` |
+The resource is protected by the Echo OAuth MCP connector. Clients must authorize the read and/or generation scopes they use. An existing connector created before the OAuth boundary was installed must be reauthorized once; a 401 is the expected fail-closed response until that consent completes.
 
-Public **API** plugin (no cookies) is a different resource: `https://mcp.echo-op.com/oauth-mcp-suno-v1` from [echo-music-studio](https://github.com/echoomegaprime/echo-music-studio).
+## Public tool contract
 
-## Tools
+- `suno_status({})`
+- `suno_generate({ confirmation: "EXECUTE", title?, prompt, tags?, instrumental?, voice?, audio_influence? })`
+- `suno_job({ ids: ["..."] })`
 
-- `suno_status` — session live? credits? cookie never returned
-- `suno_generate` — `{ confirmation: "EXECUTE", title, prompt, tags, instrumental }`
-- `suno_job` — `{ ids: ["..."] }`
+`audio_influence` uses the Suno connector scale `0..100`. Generation returns clip/job IDs only after provider submission. `CAPTCHA_REQUIRED` with `submitted: false` is a recoverable result and must not be converted into a generic connector error.
 
-## Grok
+## Trust boundary
 
-Settings → Connectors → add remote MCP:
+The OAuth edge forwards only these three allowlisted tools to `127.0.0.1:8789`, with bounded request/response sizes and timeout, using a server-side shared credential. It rejects arbitrary URLs, headers, tools, and secret-bearing response fields. The direct backend MCP path returns 401 without the shared credential.
 
-```
-https://mcp.echo-op.com/oauth-mcp-suno-session-v1
-```
+## Local MCP development
 
-Until that host is wired on Echo Nexus, use the operator URL you deploy (HTTPS, not localhost). Same path.
-
-## ChatGPT / GPT
-
-Settings → Connectors / Apps → add MCP server URL:
-
-```
-https://YOUR-HOST/oauth-mcp-suno-session-v1
-```
-
-Custom GPT Actions can also hit REST:
-
-- `GET /v1/status`
-- `POST /v1/generate`
-- `GET /v1/job?ids=`
-
-## Claude
-
-**Claude Desktop** (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "echo-suno-operator": {
-      "command": "node",
-      "args": ["/ABSOLUTE/PATH/echo-suno-operator/src/mcp-stdio.js"],
-      "cwd": "/ABSOLUTE/PATH/echo-suno-operator"
-    }
-  }
-}
-```
-
-**Claude remote / Cowork** — same HTTPS URL as Grok.
-
-## GitHub (code, not runtime)
-
-| Client | App to install on `echo-suno-operator` |
-| --- | --- |
-| Grok | [Grok (by xAI)](https://github.com/apps/grok-by-xai) |
-| GPT / Codex | [ChatGPT Codex Connector](https://github.com/apps/chatgpt-codex-connector/installations/new) |
-| Claude | Claude GitHub connector on this **private** repo |
+`node src/mcp-stdio.js` bypasses the HTTP proxy because stdio remains on the local host. Never expose stdio over a public transport or package production session material with a desktop configuration.
