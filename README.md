@@ -17,7 +17,7 @@ Unofficial. Your account only. Cookie never goes to Grok, GPT, Claude, or Qwen �
 You → Grok / GPT / Claude / Qwen
         → Echo operator (this box)
         → encrypted Clerk session
-        → studio-api.suno.ai as YOUR Suno user
+        → studio-api-prod.suno.com as YOUR Suno user
 ```
 
 ## Run

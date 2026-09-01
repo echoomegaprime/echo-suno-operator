@@ -102,10 +102,11 @@ async function mintTurnstile(timeoutMs = 9000) {
   return out;
 }
 
-async function studio(cookie, path, init = {}) {
-  const { jwt } = await sessionJwt(cookie);
+async function studio(cookie, path, init = {}, existingJwt = null) {
+  const jwt = existingJwt || (await sessionJwt(cookie)).jwt;
   const res = await fetch(`${STUDIO()}${path}`, {
     ...init,
+    signal: init.signal || AbortSignal.timeout(15000),
     headers: {
       Authorization: `Bearer ${jwt}`,
       "Content-Type": "application/json",
@@ -135,7 +136,7 @@ export async function whoAmI(cookie) {
   let credits = null;
   let handle = auth.name;
   try {
-    const billing = await studio(cookie, "/api/billing/info/");
+    const billing = await studio(cookie, "/api/billing/info/", {}, auth.jwt);
     credits =
       billing?.total_credits_left ??
       billing?.credits ??
@@ -143,7 +144,7 @@ export async function whoAmI(cookie) {
       null;
   } catch {
     try {
-      const me = await studio(cookie, "/api/session/");
+      const me = await studio(cookie, "/api/session/", {}, auth.jwt);
       handle = me?.user?.display_name || me?.display_name || handle;
       credits = me?.user?.credits ?? me?.credits ?? credits;
     } catch {
@@ -257,7 +258,7 @@ export async function generate(cookie, input) {
   // which Suno reports only as 422 INVALID_ARGUMENT at /api/generate/v2-web/.
   let billing = null;
   try {
-    billing = await studio(cookie, "/api/billing/info/");
+    billing = await studio(cookie, "/api/billing/info/", {}, jwt);
   } catch (e) {
     const err = new Error("Suno billing/model capability lookup failed; generation was not submitted");
     err.status = 503;
@@ -328,6 +329,7 @@ export async function generate(cookie, input) {
   try {
     const check = await fetch(`${GEN_API()}/api/c/check`, {
       method: "POST",
+      signal: AbortSignal.timeout(15000),
       headers: {
         Authorization: `Bearer ${jwt}`,
         "Content-Type": "application/json",
@@ -427,6 +429,7 @@ export async function generate(cookie, input) {
 
   const res = await fetch(`${GEN_API()}/api/generate/v2-web/`, {
     method: "POST",
+    signal: AbortSignal.timeout(30000),
     headers: {
       Authorization: `Bearer ${jwt}`,
       "Content-Type": "application/json",

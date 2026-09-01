@@ -2,7 +2,7 @@
 // outgoing v2-web body matches the REAL browser voice-generation body captured over CDP 2026-08-22.
 // The voice-application field is top-level `task: "vox"` (persona_id alone is accepted but ignored).
 // No real Suno traffic, no credits spent. Also checks the no-voice body stays clean, and name-res.
-import { generate, voices } from "./src/suno.js";
+import { generate, voices, whoAmI } from "./src/suno.js";
 import { readFile } from "node:fs/promises";
 
 const realFetch = global.fetch;
@@ -16,6 +16,8 @@ let captchaRequired = false;
 let allowCdpDiscovery = false;
 let generationCalls = 0;
 let billingUrl = null;
+let tokenCalls = 0;
+let tokenUrl = null;
 
 function jwtStub() {
   // Structurally valid header.payload.sig; billing, not the JWT, now supplies user_tier.
@@ -31,6 +33,8 @@ global.fetch = async (input, init = {}) => {
   }
   // Clerk token -> a jwt
   if (url.includes("/tokens")) {
+    tokenCalls++;
+    tokenUrl = url;
     return new Response(JSON.stringify({ jwt: jwtStub() }), { status: 200 });
   }
   // Current billing contract -> account plan id + dynamic usable/default models.
@@ -83,6 +87,8 @@ ok(capturedGenBody.metadata.user_tier === "premier", "uses billing plan.id for u
 ok(capturedGenBody.metadata.create_surface === "create", "sets current create_surface metadata");
 ok(billingUrl?.startsWith("https://studio-api-prod.suno.com/"), "billing uses the current web API host");
 ok(capturedGenBody.project_id === undefined, "default-project generation omits optional project_id like the web builder");
+ok(tokenCalls === 2, "voice resolution + generation mint once each; billing adds no duplicate mint");
+ok(tokenUrl?.includes("__clerk_api_version=2025-11-10") && tokenUrl?.includes("_clerk_js_version=5.117.0"), "token POST carries current Clerk version parameters");
 
 // 2) voice with NO audio_influence -> defaults to 75 (recommended high)
 capturedGenBody = null;
@@ -192,6 +198,13 @@ const launcher = await readFile(new URL("./run_suno.ps1", import.meta.url), "utf
 ok(/\$PSScriptRoot/i.test(launcher), "uses its deployed directory, not a user-specific path");
 ok(/Start-Process[\s\S]*-WindowStyle Hidden/i.test(launcher), "starts the service process hidden");
 ok(!/C:\\Users\\/i.test(launcher), "contains no hard-coded user profile path");
+
+// 12) Status also reuses its minted JWT for billing rather than hitting Clerk twice.
+console.log("[12] status Clerk mint count");
+const callsBeforeStatus = tokenCalls;
+const status = await whoAmI(COOKIE);
+ok(status.authenticated === true, "status authenticates through the stubbed session");
+ok(tokenCalls === callsBeforeStatus + 1, "status mints exactly one Clerk token");
 
 global.fetch = realFetch;
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
