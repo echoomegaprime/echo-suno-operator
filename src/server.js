@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 import { saveCookie, readCookie, clearCookie, publicHint } from "./vault.js";
 import { generate, poll, whoAmI, voices, voiceGuide, library } from "./suno.js";
 import { handleMcp, RESOURCE, resourceMeta } from "./mcp.js";
+import { proxyAuthorized } from "./proxy-auth.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 8788);
 
 // Optional write-gate for the public studio UI: when SUNO_UI_TOKEN is set, credit-spending /
 // session endpoints require a matching `x-suno-token` header so a random visitor to the public
-// URL cannot spend the owner's Suno credits. Read endpoints (status/voices/job/voice-guide) and
-// the MCP connector path stay open — the connectors (Claude/GPT/Grok) are unaffected.
+// URL cannot spend the owner's Suno credits or read private account/library state.
 const UI_TOKEN = process.env.SUNO_UI_TOKEN || "";
 function gated(req, res) {
   if (UI_TOKEN && req.headers["x-suno-token"] !== UI_TOKEN) {
@@ -83,6 +83,12 @@ async function handle(req, res) {
     (req.method === "POST" || req.method === "GET") &&
     (url.pathname === RESOURCE.path || url.pathname === "/mcp")
   ) {
+    // The public OAuth connector is the sole HTTP caller. It adds this
+    // credential only after validating the user's OAuth token and scopes.
+    if (!proxyAuthorized(req)) {
+      json(res, 401, { ok: false, error: "UNAUTHORIZED", cookie_exposed: false });
+      return;
+    }
     if (req.method === "GET") {
       json(res, 200, {
         ok: true,
@@ -105,6 +111,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/v1/status") {
+    if (gated(req, res)) return;
     const cookie = await readCookie();
     if (!cookie) {
       json(res, 200, {
@@ -129,6 +136,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/v1/voices") {
+    if (gated(req, res)) return;
     const cookie = await readCookie();
     if (!cookie) {
       json(res, 401, { ok: false, error: "NO_SESSION", cookie_exposed: false });
@@ -206,6 +214,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/v1/job") {
+    if (gated(req, res)) return;
     const cookie = await readCookie();
     if (!cookie) {
       json(res, 401, { ok: false, error: "NO_SESSION" });
@@ -218,6 +227,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/v1/library") {
+    if (gated(req, res)) return;
     const cookie = await readCookie();
     if (!cookie) {
       json(res, 401, { ok: false, error: "NO_SESSION" });
