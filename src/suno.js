@@ -1,7 +1,9 @@
 import { sessionJwt } from "./clerk.js";
 
-// studio-api.prod.suno.com — billing / session / feed (poll). Verified live 2026-08-22.
-const STUDIO = () => (process.env.SUNO_STUDIO_API || "https://studio-api.suno.ai").replace(/\/$/, "");
+// studio-api-prod.suno.com — the current web API host for billing, session, feed and generation.
+// Keep the explicit override for rollback/emergency routing, but do not default to the retired
+// studio-api.suno.ai host.
+const STUDIO = () => (process.env.SUNO_STUDIO_API || "https://studio-api-prod.suno.com").replace(/\/$/, "");
 // studio-api-prod.suno.com — the CURRENT song-generation host (note the hyphen, NOT a dot).
 // The web client posts to /api/generate/v2-web/ here; the old studio-api.prod .../v2/ path is
 // deprecated and defaults callers to chirp-v4. Verified via CDP capture of a real v5.5 generation.
@@ -9,7 +11,9 @@ const GEN_API = () => (process.env.SUNO_GENERATE_API || "https://studio-api-prod
 // ShadowGlass Chrome CDP endpoint — used ONLY to mint a fresh Cloudflare Turnstile token from the
 // live signed-in suno.com tab (the token gate is risk-scored and can re-activate server-side).
 const CDP_URL = () => (process.env.SUNO_CDP_URL || "http://127.0.0.1:9222").replace(/\/$/, "");
-// v5.5 == chirp-fenix (major_model_version "v5.5"). Overridable per-call via input.mv.
+// Last-resort compatibility fallback only. The current web client selects the account's usable
+// default from /api/billing/info/ on every load; generation must do the same because model access
+// and defaults change independently of this operator.
 const DEFAULT_MV = process.env.SUNO_DEFAULT_MV || "chirp-fenix";
 
 // A stable per-process device fingerprint id, used only if we cannot read the browser's real one.
@@ -23,16 +27,6 @@ function fallbackDeviceId() {
 function browserToken() {
   const inner = Buffer.from(JSON.stringify({ timestamp: Date.now() })).toString("base64");
   return JSON.stringify({ token: inner });
-}
-
-// Decode a JWT payload (no verification) to read non-secret claims (plan/user_tier).
-function jwtClaims(jwt) {
-  try {
-    const p = jwt.split(".")[1];
-    return JSON.parse(Buffer.from(p.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
-  } catch {
-    return {};
-  }
 }
 
 /**
@@ -257,8 +251,43 @@ async function resolveVoiceId(cookie, voice) {
 
 export async function generate(cookie, input) {
   const { jwt } = await sessionJwt(cookie);
-  const claims = jwtClaims(jwt);
-  const userTier = (claims.plan ? String(claims.plan).split(":")[0] : null) || null;
+
+  // Current Suno web contract: both user_tier and the permitted/default model come from billing.
+  // JWT plan strings and a hard-coded model can be stale even while the session remains valid,
+  // which Suno reports only as 422 INVALID_ARGUMENT at /api/generate/v2-web/.
+  let billing = null;
+  try {
+    billing = await studio(cookie, "/api/billing/info/");
+  } catch (e) {
+    const err = new Error("Suno billing/model capability lookup failed; generation was not submitted");
+    err.status = 503;
+    err.body = { error_code: "BILLING_CAPABILITY_UNAVAILABLE", upstream_status: e?.status || null };
+    throw err;
+  }
+  const userTier = billing?.plan?.id || null;
+  const billingModels = Array.isArray(billing?.models) ? billing.models : [];
+  const usableModels = billingModels.filter((m) => m?.can_use && m?.external_key);
+  if (!userTier || !usableModels.length) {
+    const err = new Error("Suno billing response did not contain a plan and usable model; generation was not submitted");
+    err.status = 503;
+    err.body = { error_code: "BILLING_CAPABILITY_INCOMPLETE" };
+    throw err;
+  }
+  let model = input.mv || null;
+  if (model && billingModels.length && !usableModels.some((m) => m.external_key === model)) {
+    const err = new Error(`Suno model is not available for this account: ${model}`);
+    err.status = 422;
+    err.body = { error_code: "MODEL_NOT_AVAILABLE" };
+    throw err;
+  }
+  if (!model) {
+    model =
+      usableModels.find((m) => m.is_default_model)?.external_key ||
+      usableModels.find((m) => m.is_default_free_model)?.external_key ||
+      usableModels.find((m) => m.external_key === DEFAULT_MV)?.external_key ||
+      usableModels[0]?.external_key ||
+      DEFAULT_MV;
+  }
 
   // v5.5 Voice: resolve the requested voice (id or name) to a persona id, and set Audio Influence.
   // Verified body shape (CDP Network.getRequestPostData capture of a REAL browser voice generation,
@@ -278,13 +307,66 @@ export async function generate(cookie, input) {
   }
 
   // Custom (own-lyrics) vs simple (description) create — mirrors the web client's two modes.
-  const custom = Boolean(input.custom || input.lyrics);
+  // The native MCP schema exposes custom/lyrics, but some connector surfaces currently forward
+  // only prompt + tags. Infer custom lyrics for that lossless shape while keeping tagged
+  // instrumental description requests in simple mode.
+  const promptText = String(input.prompt || "");
+  const connectorPromptLooksLikeLyrics = /^\s*\[(intro|verse|pre-?chorus|chorus|hook|bridge|break|outro)(?:[^\]]*)\]/im.test(promptText);
+  const custom = Boolean(
+    input.custom ||
+    input.lyrics ||
+    (input.custom === undefined && input.tags && !input.instrumental && connectorPromptLooksLikeLyrics)
+  );
   const description = input.gpt_description_prompt || input.description || (custom ? "" : input.prompt || "");
   const lyrics = custom ? (input.lyrics || input.prompt || "") : "";
 
-  // Best-effort: mint a fresh Turnstile token + read the browser's device-id from ShadowGlass.
-  const minted = await mintTurnstile();
-  const deviceId = minted.deviceId || fallbackDeviceId();
+  // The current web client asks the generation captcha gate first. Only touch an already-running
+  // CDP browser when Suno explicitly requires a token; this operator never launches a browser.
+  let deviceId = fallbackDeviceId();
+  let captchaRequired = false;
+  let captchaCheck = "not-required";
+  try {
+    const check = await fetch(`${GEN_API()}/api/c/check`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        "Content-Type": "application/json",
+        "accept-language": "en",
+        "device-id": deviceId,
+        "browser-token": browserToken(),
+        Origin: "https://suno.com",
+        Referer: "https://suno.com/",
+      },
+      body: JSON.stringify({ ctype: "generation" }),
+    });
+    if (check.ok) {
+      const body = await check.json();
+      captchaRequired = Boolean(body?.required ?? body?.captcha_required ?? body?.is_captcha_required);
+      captchaCheck = captchaRequired ? "required" : "not-required";
+    } else {
+      const err = new Error("Suno captcha preflight failed; generation was not submitted");
+      err.status = 503;
+      err.body = { error_code: "CAPTCHA_CHECK_FAILED", upstream_status: check.status };
+      throw err;
+    }
+  } catch (e) {
+    if (e?.body?.error_code === "CAPTCHA_CHECK_FAILED") throw e;
+    const err = new Error("Suno captcha preflight failed; generation was not submitted");
+    err.status = 503;
+    err.body = { error_code: "CAPTCHA_CHECK_FAILED" };
+    throw err;
+  }
+  const minted = captchaRequired
+    ? await mintTurnstile()
+    : { token: null, deviceId: null, via: captchaCheck };
+  if (captchaRequired && !minted.token) {
+    const err = new Error("Suno requires a generation captcha token; no song was submitted");
+    err.status = 409;
+    err.body = { error_code: "CAPTCHA_REQUIRED" };
+    err.token_via = minted.via;
+    throw err;
+  }
+  deviceId = minted.deviceId || deviceId;
 
   // `task: "vox"` is the field that ROUTES the generation through the voice/vox model. It is set
   // ONLY when a voice is resolved; the no-voice path omits it entirely (no capture of a no-voice
@@ -293,7 +375,7 @@ export async function generate(cookie, input) {
   const payload = {
     generation_type: "TEXT",
     ...(isVoiceGen ? { task: "vox" } : {}),
-    mv: input.mv || DEFAULT_MV,
+    mv: model,
     prompt: lyrics,                         // lyrics for custom mode; "" for simple/description mode
     // gpt_description_prompt is the SIMPLE-mode "Song Description" box. The custom/Advanced mode
     // body omits it entirely (matches the captured browser body), so only send it in simple mode.
@@ -305,6 +387,7 @@ export async function generate(cookie, input) {
     user_uploaded_images_b64: null,
     metadata: {
       web_client_pathname: "/create",
+      create_surface: "create",
       is_max_mode: false,
       is_mumble: false,
       create_mode: custom ? "custom" : "simple",
@@ -373,7 +456,7 @@ export async function generate(cookie, input) {
   return {
     ids,
     raw: body,
-    model: input.mv || DEFAULT_MV,
+    model,
     token_via: minted.via,
     voice: resolvedVoice ? { id: resolvedVoice.id, name: resolvedVoice.name } : null,
     audio_influence: audioWeight,

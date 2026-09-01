@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "mcp": "node src/mcp-stdio.js"
+    "mcp": "node src/mcp-stdio.js",
+    "test": "node test_voice_body.mjs"
   }
 }

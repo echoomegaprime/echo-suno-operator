@@ -3,12 +3,22 @@
 // The voice-application field is top-level `task: "vox"` (persona_id alone is accepted but ignored).
 // No real Suno traffic, no credits spent. Also checks the no-voice body stays clean, and name-res.
 import { generate, voices } from "./src/suno.js";
+import { readFile } from "node:fs/promises";
 
 const realFetch = global.fetch;
 let capturedGenBody = null;
+let billingModels = [
+  { external_key: "chirp-fenix", can_use: true, is_default_model: false },
+  { external_key: "chirp-auk-turbo", can_use: true, is_default_model: true },
+];
+let billingShouldFail = false;
+let captchaRequired = false;
+let allowCdpDiscovery = false;
+let generationCalls = 0;
+let billingUrl = null;
 
 function jwtStub() {
-  // header.payload.sig with a plan claim so userTier resolves
+  // Structurally valid header.payload.sig; billing, not the JWT, now supplies user_tier.
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   return `${b64({ alg: "none" })}.${b64({ plan: "premier:monthly" })}.sig`;
 }
@@ -23,8 +33,19 @@ global.fetch = async (input, init = {}) => {
   if (url.includes("/tokens")) {
     return new Response(JSON.stringify({ jwt: jwtStub() }), { status: 200 });
   }
-  // CDP tab discovery (mintTurnstile) -> no suno tab
+  // Current billing contract -> account plan id + dynamic usable/default models.
+  if (url.includes("/api/billing/info/")) {
+    billingUrl = url;
+    if (billingShouldFail) return new Response(JSON.stringify({ error: "temporary" }), { status: 503 });
+    return new Response(JSON.stringify({ plan: { id: "premier" }, models: billingModels }), { status: 200 });
+  }
+  // Current captcha preflight -> no token/browser access required.
+  if (url.includes("/api/c/check")) {
+    return new Response(JSON.stringify({ required: captchaRequired, captcha_version: 2 }), { status: 200 });
+  }
+  // CDP tab discovery (mintTurnstile) -> no suno tab. This must remain unused when not required.
   if (url.includes(":9222/json")) {
+    if (!allowCdpDiscovery) throw new Error("CDP must not be contacted when captcha is not required");
     return new Response(JSON.stringify([]), { status: 200 });
   }
   // persona list -> empty (owner has no voices)
@@ -33,6 +54,7 @@ global.fetch = async (input, init = {}) => {
   }
   // the generate call -> capture body, return a fake clip
   if (url.includes("/api/generate/v2-web/")) {
+    generationCalls++;
     capturedGenBody = JSON.parse(init.body);
     return new Response(JSON.stringify({ clips: [{ id: "clip_fake_123" }] }), { status: 200 });
   }
@@ -56,6 +78,11 @@ ok(capturedGenBody.token === null && capturedGenBody.token_provider === null, "t
 ok(capturedGenBody.metadata?.control_sliders?.audio_weight === 0.9, "control_sliders.audio_weight == 0.9 (90/100 float)");
 ok(capturedGenBody.metadata.control_sliders.weirdness_constraint === 0.5 && capturedGenBody.metadata.control_sliders.style_weight === 0.5, "other sliders default to 0.5 float");
 ok(r1.voice?.id === uuid && r1.audio_influence === 90, "result surfaces voice + audio_influence");
+ok(capturedGenBody.mv === "chirp-auk-turbo", "uses the account's current usable default model");
+ok(capturedGenBody.metadata.user_tier === "premier", "uses billing plan.id for user_tier");
+ok(capturedGenBody.metadata.create_surface === "create", "sets current create_surface metadata");
+ok(billingUrl?.startsWith("https://studio-api-prod.suno.com/"), "billing uses the current web API host");
+ok(capturedGenBody.project_id === undefined, "default-project generation omits optional project_id like the web builder");
 
 // 2) voice with NO audio_influence -> defaults to 75 (recommended high)
 capturedGenBody = null;
@@ -90,6 +117,81 @@ console.log("[5] audio_influence only");
 ok(capturedGenBody.metadata?.control_sliders?.audio_weight === 0.4, "audio_weight == 0.4 float, persona_id null");
 ok(capturedGenBody.persona_id === null, "persona_id null");
 ok(capturedGenBody.task === undefined, "no 'task' field without a voice");
+
+// 6) Ambiguous prompt + tags stays simple; section-marked prompt + tags is own-lyrics mode.
+capturedGenBody = null;
+await generate(COOKIE, { prompt: "original lyric line", tags: "hard rap", title: "Connector shape" });
+console.log("[6] connector prompt + tags");
+ok(capturedGenBody.prompt === "", "ambiguous single-line prompt is not treated as lyrics");
+ok(capturedGenBody.gpt_description_prompt === "original lyric line", "ambiguous prompt remains a description");
+ok(capturedGenBody.metadata.create_mode === "simple", "ambiguous create_mode == simple");
+
+capturedGenBody = null;
+await generate(COOKIE, { prompt: "[Verse 1]\noriginal lyric line\n\n[Hook]\nno cape", tags: "hard rap", title: "Connector lyrics" });
+console.log("[6b] connector section-marked lyrics + tags");
+ok(capturedGenBody.prompt.startsWith("[Verse 1]"), "section-marked prompt is preserved as custom lyrics");
+ok(capturedGenBody.tags === "hard rap", "tags are preserved in inferred custom mode");
+ok(capturedGenBody.gpt_description_prompt === undefined, "custom description field is omitted");
+ok(capturedGenBody.metadata.create_mode === "custom", "section-marked create_mode == custom");
+
+capturedGenBody = null;
+await generate(COOKIE, { custom: false, prompt: "[Verse]\nnot literal lyrics", tags: "hard rap", title: "Explicit simple" });
+ok(capturedGenBody.gpt_description_prompt.startsWith("[Verse]"), "explicit custom:false overrides lyric-shape inference");
+ok(capturedGenBody.metadata.create_mode === "simple", "explicit custom:false create_mode == simple");
+
+// 7) A tagged instrumental request stays in simple-description mode.
+capturedGenBody = null;
+await generate(COOKIE, { prompt: "short neutral cue", tags: "ambient", instrumental: true, title: "Diagnostic" });
+console.log("[7] tagged instrumental connector shape");
+ok(capturedGenBody.prompt === "", "instrumental prompt is not misclassified as lyrics");
+ok(capturedGenBody.gpt_description_prompt === "short neutral cue", "description is preserved");
+ok(capturedGenBody.tags === undefined, "custom tags field is omitted in simple mode");
+ok(capturedGenBody.metadata.create_mode === "simple", "create_mode == simple");
+
+// 8) Explicit unavailable model fails locally, before any generation can spend credits.
+console.log("[8] unavailable explicit model");
+try {
+  await generate(COOKIE, { mv: "chirp-retired", prompt: "x", instrumental: true });
+  ok(false, "should have rejected unavailable model");
+} catch (e) {
+  ok(e.status === 422 && e.body?.error_code === "MODEL_NOT_AVAILABLE", "rejects unavailable explicit model");
+}
+
+// 9) Billing/model capability failure is classified and cannot submit generation.
+console.log("[9] billing failure fail-closed");
+billingShouldFail = true;
+const callsBeforeBillingFailure = generationCalls;
+try {
+  await generate(COOKIE, { prompt: "x", instrumental: true });
+  ok(false, "should have failed closed on billing lookup");
+} catch (e) {
+  ok(e.status === 503 && e.body?.error_code === "BILLING_CAPABILITY_UNAVAILABLE", "classifies billing lookup failure");
+  ok(generationCalls === callsBeforeBillingFailure, "billing failure submits no generation");
+}
+billingShouldFail = false;
+
+// 10) Captcha-required without a minted token is classified and cannot submit generation.
+console.log("[10] captcha required fail-closed");
+captchaRequired = true;
+allowCdpDiscovery = true;
+const callsBeforeCaptchaFailure = generationCalls;
+try {
+  await generate(COOKIE, { prompt: "x", instrumental: true });
+  ok(false, "should have failed closed without captcha token");
+} catch (e) {
+  ok(e.status === 409 && e.body?.error_code === "CAPTCHA_REQUIRED", "classifies missing required captcha token");
+  ok(generationCalls === callsBeforeCaptchaFailure, "captcha failure submits no generation");
+}
+captchaRequired = false;
+allowCdpDiscovery = false;
+
+// 11) Windows launcher must be portable and force the Node child to remain hidden. Deployment
+// separately verifies the parent is an S4U, noninteractive, hidden-window scheduled task action.
+console.log("[11] headless Windows launcher");
+const launcher = await readFile(new URL("./run_suno.ps1", import.meta.url), "utf8");
+ok(/\$PSScriptRoot/i.test(launcher), "uses its deployed directory, not a user-specific path");
+ok(/Start-Process[\s\S]*-WindowStyle Hidden/i.test(launcher), "starts the service process hidden");
+ok(!/C:\\Users\\/i.test(launcher), "contains no hard-coded user profile path");
 
 global.fetch = realFetch;
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
