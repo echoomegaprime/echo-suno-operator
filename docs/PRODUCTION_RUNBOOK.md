@@ -12,6 +12,19 @@ Fast-forward the clean HAMMER checkout to the exact review SHA. Run all tests wi
 
 Preserve the exact deployed pack because HAMMER may contain additive, unmerged modules. Back up the live pack by hash, apply only the Suno module and minimal pack registration, compile with the deployed Python runtime, and restart only `EchoOAuthMCP`. Verify a new service/child PID, session 0, zero window handle, public unauthenticated 401, internal sanitized status, exact route ordering, and unchanged global catch-all.
 
+## Verify the public route
+
+The remotely managed `echo-omega-bridge` tunnel rule must appear before the generic MCP fallback and use a Go-compatible regular expression with the leading slash:
+
+```text
+path: ^/oauth-mcp-suno-session-v1(/.*)?$
+service: http://127.0.0.1:8796
+```
+
+Run `npm run verify:public`. It must identify `echo-oauth-mcp-suno-session-v1`, expose exactly `suno_status`, `suno_generate`, and `suno_job`, receive HTTP 401 plus an OAuth challenge on an unauthenticated initialize, and observe no `Set-Cookie` header. An HTTP 200 from a generic service is a route failure, not health. Cloudflare evaluates ingress rules from top to bottom and uses Go regular expressions for `path`, so preserve both the exact expression and its position before the fallback.
+
+Authoritative references: [Cloudflare tunnel ingress configuration](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/configuration-file/) and [Cloudflare remotely managed tunnel configuration API](https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/subresources/configurations/).
+
 ## Provider acceptance
 
 Call status without emitting private fields. Submit a harmless minimal prompt with exact confirmation. If IDs return, poll until complete and record only IDs, terminal status, and audio URL. If `CAPTCHA_REQUIRED` returns, verify `submitted: false` and stop; the account owner must complete provider verification. Never synthesize IDs or report a track as generated without them.

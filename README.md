@@ -59,4 +59,6 @@ Run `npm test`. A production acceptance pass additionally requires:
 - hosted CI, CodeQL, Certification Forge, and Release Sentinel evidence;
 - Commander signature on the exact-SHA certificate.
 
+Run `npm run verify:public` from a networked verification host to prove that the public URL is owned by the scoped Suno OAuth service and fails closed before authentication. This probe sends no credentials and does not generate content.
+
 See `docs/PRODUCTION_RUNBOOK.md` for deployment and rollback, `docs/ARCHITECTURE.md` for trust boundaries, and `docs/INCIDENT-2026-09-01.md` for the repaired failure chain.

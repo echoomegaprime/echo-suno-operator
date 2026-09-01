@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "mcp": "node src/mcp-stdio.js",
-    "test": "node test_voice_body.mjs && node test_mcp_error_contract.mjs && node test_proxy_auth.mjs && node test_server_security.mjs"
+    "test": "node test_voice_body.mjs && node test_mcp_error_contract.mjs && node test_proxy_auth.mjs && node test_server_security.mjs && node test_public_boundary_verifier.mjs",
+    "verify:public": "node scripts/verify_public_oauth_boundary.mjs"
   }
 }
