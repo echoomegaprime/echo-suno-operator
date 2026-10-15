@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { createInterface } from "node:readline";
 
-const port = 18789;
 const proxyToken = "s".repeat(48);
 const uiToken = "u".repeat(48);
 const child = spawn(process.execPath, ["src/server.js"], {
@@ -11,28 +11,43 @@ const child = spawn(process.execPath, ["src/server.js"], {
   stdio: ["ignore", "pipe", "pipe"],
   env: {
     ...process.env,
-    PORT: String(port),
+    PORT: "0",
+    HOST: "127.0.0.1",
     SUNO_PROXY_TOKEN: proxyToken,
     SUNO_UI_TOKEN: uiToken,
   },
 });
 
-async function waitReady() {
-  let combined = "";
-  const deadline = Date.now() + 5000;
-  while (!combined.includes("echo-suno-operator") && Date.now() < deadline) {
-    const next = await Promise.race([
-      once(child.stdout, "data").then(([chunk]) => chunk.toString("utf8")),
-      once(child.stderr, "data").then(([chunk]) => chunk.toString("utf8")),
-      new Promise((resolve) => setTimeout(() => resolve(""), 100)),
-    ]);
-    combined += next;
-  }
-  assert.match(combined, /echo-suno-operator/);
+function waitReady() {
+  return new Promise((resolve, reject) => {
+    const lines = createInterface({ input: child.stdout });
+    const timer = setTimeout(() => finish(new Error("owned test server readiness timed out")), 5000);
+    const onExit = (code) => finish(new Error(`owned test server exited before readiness: ${code}`));
+    const onError = () => finish(new Error("owned test server could not start"));
+    function finish(error, value) {
+      clearTimeout(timer);
+      lines.close();
+      child.removeListener("exit", onExit);
+      child.removeListener("error", onError);
+      if (error) reject(error); else resolve(value);
+    }
+    child.once("exit", onExit);
+    child.once("error", onError);
+    lines.on("line", (line) => {
+      let value;
+      try { value = JSON.parse(line); } catch { return; }
+      if (value.event !== "suno_operator_listening") return;
+      if (value.pid !== child.pid || value.host !== "127.0.0.1" || !Number.isInteger(value.port) || value.port <= 0 || value.port > 65535) {
+        finish(new Error("owned test server readiness identity mismatch"));
+        return;
+      }
+      finish(null, value);
+    });
+  });
 }
 
 try {
-  await waitReady();
+  const { port } = await waitReady();
   const endpoint = `http://127.0.0.1:${port}/oauth-mcp-suno-session-v1`;
   const unauthenticated = await fetch(endpoint, {
     method: "POST",
@@ -64,6 +79,9 @@ try {
 
   console.log("server security contract: ok");
 } finally {
-  child.kill();
-  await Promise.race([once(child, "exit"), new Promise((resolve) => setTimeout(resolve, 2000))]);
+  if (child.exitCode === null && child.signalCode === null) {
+    const exited = once(child, "exit");
+    child.kill();
+    await exited;
+  }
 }

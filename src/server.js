@@ -9,6 +9,7 @@ import { proxyAuthorized } from "./proxy-auth.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 8788);
+const HOST = process.env.HOST || "127.0.0.1";
 
 // Optional write-gate for the public studio UI: when SUNO_UI_TOKEN is set, credit-spending /
 // session endpoints require a matching `x-suno-token` header so a random visitor to the public
@@ -242,7 +243,7 @@ async function handle(req, res) {
   json(res, 404, { error: "not found" });
 }
 
-createServer((req, res) => {
+const server = createServer((req, res) => {
   handle(req, res).catch((err) => {
     json(res, err.status || 500, {
       ok: false,
@@ -251,6 +252,17 @@ createServer((req, res) => {
       cookie_exposed: false,
     });
   });
-}).listen(PORT, "0.0.0.0", () => {
-  console.log(`echo-suno-operator http://0.0.0.0:${PORT}`);
+});
+
+server.on("error", (err) => {
+  console.error(JSON.stringify({ event: "suno_operator_listen_failed", code: err.code || "UNKNOWN", host: HOST, port: PORT, pid: process.pid }));
+  process.exitCode = 1;
+});
+if (process.env.SUNO_DEBUG === "1") {
+  console.debug(JSON.stringify({ event: "suno_operator_listen_start", host: HOST, requested_port: PORT, pid: process.pid }));
+}
+server.listen(PORT, HOST, () => {
+  const address = server.address();
+  console.log(`echo-suno-operator http://${address.address}:${address.port}`);
+  console.log(JSON.stringify({ event: "suno_operator_listening", host: address.address, port: address.port, pid: process.pid }));
 });
